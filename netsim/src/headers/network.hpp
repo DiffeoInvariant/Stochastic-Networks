@@ -43,10 +43,10 @@ namespace netsim
 	enum GraphStorageType
 	{
 		BoostAdjList,
-		PetscAdjMat,//makes an adjacency matrix from a PETSc matrix
+		PetscDMNet,//makes a PETSc DMNetwork
 		BoostAdjMat,
 		BoostAdjListMat,//stores both a boost::adjacency_list and a boost::adjacency_matrix
-		BoostAdjListPetscAdjMat//stores both a boost::adjacency_list and a PETSc adjacency matrix 
+		BoostAdjListPetscDMNet //stores both a boost::adjacency_list and a PETSc DMNetwork
 	};
 
 	enum DirectedType
@@ -111,6 +111,14 @@ namespace netsim
 		AdjMat_t 	m_adj_mat;
 
 	};
+
+	/*Specialization for PETSc DMNetwork to hold data*/
+	template<typename VertexProperties=void, typename EdgeProperties=void>
+	class Graph<Undirected, Unweighted, void, VertexProperties, EdgeProperties, PetscDMNet>
+	{
+	public:
+
+		Graph(
 
 
 
