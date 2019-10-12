@@ -1,0 +1,27 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{bm}
+\begin{document}
+
+\title{Stochastic Networks HW 3}
+\author{Zane Jakobs}
+\date{}
+\maketitle
+Note that for problem 3, $\theta(x)$ is the Heaviside step function.
+\subsection*{3(a)} $k^{in}_{n,i} = \sum\limits_{i=1}^n a_ib_j,$ and $k^{in}_{n,i} = \sum\limits_{i=1}^n a_jb_i.$
+\subsection*{3(b)} $\langle k\rangle = \dfrac{1}{N}\sum\limits_{i=1}^N \sum\limits_{j=1}^N a_i b_j$
+\subsection*{3(c)} $\dfrac{\langle k^{in}_n k^{out}_n\rangle}{\langle k \rangle}  =  N\dfrac{\sum\limits_{i=1}^n\sum\limits_{j=1}^n a_ia_jb_ib_j}{\sum\limits_{i=1}^N\sum\limits_{j=1}^N a_i b_j}$
+\subsection*{3(d)} First, choose $N-1$ linearly independent vectors that are orthogonal to $\bm{b}$; they clearly have eigenvalue 0. Now, the remaining nonzero eigenvalue can be found by considering the action of the matrix,
+\[
+(\bm{a}\bm{b}^T)\bm{u} = (\bm{b}^T\bm{u})\bm{a},
+\]
+and the eigenvalue equation
+\[
+(\bm{a}\bm{b}^T)\bm{u} = \lambda \bm{u},
+\]
+from which we can see that the eigenvalue we seek is $\lambda = \bm{a}^T\bm{b},$ the corresponding right eigenvector is $\bm{u} = \bm{a}$, and the left eigenvector is $\bm{v}^T = \bm{b}^T$.
+\subsection*{4(a)} The Jacobian is $J = K\bm{A} - (1+2\bm{x})\bm{I}$, so its eigenvalues are the sums of the eigenvalues of $K\bm{A}$ and of $-(1+2\bm{0})\bm{I}$, which are all $-1$, so the Jacobian has all negative (real parts of its) eigenvalues (and thus the fixed point is stable) iff the largest eigenvalue of $K\bm{A}$, $\lambda_{\text{max}} \approx  \frac{\langle\hat{k_{in}}\hat{k_{out}}\rangle}{\langle k \rangle} + \frac{1}{K}$, is less than 1.
+
+
+\end{document}

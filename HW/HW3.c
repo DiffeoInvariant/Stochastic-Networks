@@ -60,7 +60,7 @@ static PetscErrorCode RHSFunction(TS ts, PetscReal t, Vec X, Vec F, void* ctx)
 
 	for(id = 0; id < N; ++id){
 		xval = x[id];
-		f[id] -= xval - xval * xval;
+		f[id] -= xval + xval * xval;
 	}
 
 	VecRestoreArrayRead(X, &x);
@@ -156,11 +156,9 @@ static PetscErrorCode Monitor(TS ts, PetscInt step, PetscReal t, Vec X, void* ct
 		return(-1);
 	}
 	prob->tprev = tprev;
-
 	prob->t[tsteps] = tprev + dt;
 	
 	prob->xs[tsteps] = X;
-
 	prob->num_timesteps++;
 	*/
 	PetscPrintf(PETSC_COMM_WORLD, "[%.1f] %D TS %.6f\n", (double)(prob->next_output), step, (double)t);
@@ -230,7 +228,6 @@ static PetscErrorCode ChungLuInvCDF(PetscReal p, PetscInt* k, PetscInt k0, Petsc
 	/*
 	PetscPrintf(PETSC_COMM_WORLD, "cfactor = %f\n", cfactor);
 	PetscPrintf(PETSC_COMM_WORLD, "p = %f\n", p);
-
 	
 	PetscPrintf(PETSC_COMM_WORLD, "p/c = %f\n", p/cfactor);
 	PetscPrintf(PETSC_COMM_WORLD, "1-g = %f\n", 1.0-gamma);
@@ -428,23 +425,48 @@ PetscErrorCode ReadPetscMatrix(const char filename[], Mat* readMat)
     return ierr;
 }
 
-			
+
+PetscErrorCode Degree(Mat A, Vec k, Vec ones, const char* type)
+{
+	PetscFunctionBeginUser;
+	PetscErrorCode ierr;
+	if(strcmp(type, "in") == 0){
+		ierr = MatMultTranspose(A, ones, k);
+	} else if(strcmp(type, "out") == 0){
+		ierr = MatMult(A, ones, k);
+	}
+	PetscFunctionReturn(ierr);
+}
+
+PetscErrorCode MeanDegree(Vec kin, PetscInt N, PetscReal* k)
+{
+	PetscFunctionBeginUser;
+	PetscErrorCode ierr;
+
+	ierr = VecSum(kin, k);
+
+	*k /= N;
+
+	PetscFunctionReturn(ierr);
+}
 
 
 int main(int argc, char** argv)
 {
 	TS             		ts; /* PETSc nonlinear solver/time-stepper*/            
-	Vec            		x;
+	Vec            		x, kin, kout, ones, ones2;
 	Mat            		J;   
 	Mat            		Jp;
 	PetscInt       		steps;
-	PetscReal      		solve_time, time_length = 10.0;
+	PetscReal      		solve_time,xnorm, kmean, kinner, time_length = 10.0;
 	PetscReal               step_size=0.01;
-	PetscBool      		flag, monitor = PETSC_FALSE, read_mat = PETSC_FALSE, write_mat = PETSC_TRUE;
-	char                    filename[100];
+	PetscBool      		flag, wflag, monitor = PETSC_FALSE, read_mat = PETSC_FALSE, write_mat = PETSC_TRUE;
+	char                    filename[100], writefile[100];
+	FILE                    *wf;
 	PetscMPIInt    		size, rank;
-	Vec                     *lambda, *mu;/*adjoint variables*/
+	/*Vec                     *lambda, *mu;adjoint variables*/
 	struct _n_prob_info 	user;
+	/*KSP			ksp;Krylov solver for eigenvalues of A*/
 	PetscErrorCode          ierr=0;
 	
 	PetscInitialize(&argc, &argv, NULL, help);if(ierr) return ierr;
@@ -479,6 +501,12 @@ int main(int argc, char** argv)
 	if(!flag){
 		PetscOptionsGetBool(NULL, NULL, "--write",&write_mat, &flag);
 	}
+	PetscOptionsGetString(NULL, NULL, "-wfl", writefile, 100, &wflag);
+	if(!wflag){
+		PetscOptionsGetString(NULL, NULL, "--writefile",writefile, 100, &wflag); /* 100 is max length of filename in characters, including null-terminator*/
+	}
+
+
 	PetscOptionsGetString(NULL, NULL, "-f",filename, 100, &flag); /* 100 is max length of filename in characters, including null-terminator*/
 	if(!flag){
 		PetscOptionsGetString(NULL, NULL, "--filename",filename, 100, &flag); /* 100 is max length of filename in characters, including null-terminator*/
@@ -490,17 +518,6 @@ int main(int argc, char** argv)
 	user.num_timesteps = 0;
 
 	/*create matrices and vectors*/
-	MatCreate(PETSC_COMM_WORLD, &J);
-	MatSetSizes(J, PETSC_DECIDE, PETSC_DECIDE, user.n, user.n);
-	MatSetUp(J);
-	MatCreateVecs(J, &x, NULL); /*sets up the vectors x in a parallel format that plays nicely with the Jacobian)*/
-
-	MatCreate(PETSC_COMM_WORLD, &Jp);
-	MatSetSizes(Jp, PETSC_DECIDE, PETSC_DECIDE, user.n, 1);
-	MatSetUp(Jp);
-
-	/* TODO: read in matrix user.A (adjacency matrix) from filename, set it up, etc */
-
 	MatCreate(PETSC_COMM_WORLD, &user.A);
 	MatSetSizes(user.A, PETSC_DECIDE, PETSC_DECIDE, user.n, user.n);
 	MatSetUp(user.A);
@@ -510,23 +527,69 @@ int main(int argc, char** argv)
 	} else {
 		ierr = CreateAdjacencyMatrix(&user.A, user.k0, user.n, user.gamma, write_mat, filename); CHKERRQ(ierr);
 	}
-	MatView(user.A, PETSC_VIEWER_STDOUT_WORLD);
+
+	MatCreate(PETSC_COMM_WORLD, &J);
+	MatSetSizes(J, PETSC_DECIDE, PETSC_DECIDE, user.n, user.n);
+	MatSetUp(J);
+	MatCreateVecs(J, &x, NULL); /*sets up the vectors x in a parallel format that plays nicely with the Jacobian)*/
+
+	MatCreate(PETSC_COMM_WORLD, &Jp);
+	MatSetSizes(Jp, PETSC_DECIDE, PETSC_DECIDE, user.n, 1);
+	MatSetUp(Jp);
+
+	VecCreateMPI(PETSC_COMM_WORLD, PETSC_DECIDE, user.n, &ones);
+	VecSet(ones, 1.0);
+	
+	VecCreateMPI(PETSC_COMM_WORLD, PETSC_DECIDE, user.n, &kin);
+	VecCreateMPI(PETSC_COMM_WORLD, PETSC_DECIDE, user.n, &kout);
+	VecCreateMPI(PETSC_COMM_WORLD, PETSC_DECIDE, user.n, &ones2);
 
 
+
+
+	ierr = Degree(user.A, kin, ones, "in");
+
+	ierr = Degree(user.A, kout, ones, "out");
+
+	ierr = MeanDegree(kin, user.n, &kmean);CHKERRQ(ierr);
+
+	ierr = VecDot(kin, kout, &kinner);
+
+	kinner /= user.n;
+
+	PetscPrintf(PETSC_COMM_WORLD, "<kin, kout> = %f \n <k> = %f \n, <kin,kout>/<k> = %f .\n", kinner, kmean, kinner/kmean);
+
+	/*ierr = KSPCreate(PETSC_COMM_WORLD, &ksp);
+	ierr = KSPSetFromOptions(ksp);CHKERRQ(ierr);*/
+
+	/*power method for eigenvalues 'cuz who really cares about speed? (says the guy writing this big 'ol C file...)*/
+	PetscInt i;
+	/*
+	for(i = 0; i < 100; ++i){
+		ierr = MatMult(user.A, ones, ones2);
+		ierr = VecCopy(ones2, ones);
+	}
+
+	VecNorm(ones2, NORM_2, &xnorm);
+
+	xnorm /= user.n;
+
+	PetscPrintf(PETSC_COMM_WORLD, "Largest eigenvalue: %f\n", xnorm);
+	*/
 	/* create TS context */
 	TSCreate(PETSC_COMM_WORLD, &ts);
-	TSSetType(ts, TSRK); /* for now, just use RK4 integrator */
+	TSSetFromOptions(ts);
 	TSSetMaxTime(ts, time_length);
 	TSSetRHSFunction(ts, NULL, RHSFunction, &user);
 	TSSetTimeStep(ts, step_size);
 
 	/* set Jacobian for adjoint problem */
-	TSSetRHSJacobian(ts, J, J, RHSJacobian, &user);
+	/*TSSetRHSJacobian(ts, J, J, RHSJacobian, &user);*/
 
 	TSSetExactFinalTime(ts, TS_EXACTFINALTIME_INTERPOLATE); /* if the TS goes over the allotted time_length, interpolate back to it*/
 	TSSetProblemType(ts, TS_NONLINEAR);
 
-	TSSetSaveTrajectory(ts);
+	/*TSSetSaveTrajectory(ts);*/
 
 	if(monitor){
 		TSMonitorSet(ts, Monitor, &user, NULL);
@@ -534,9 +597,8 @@ int main(int argc, char** argv)
 
 	/* TODO: apply random initial conditions to x */
 	PetscReal ic[user.n];
-	PetscInt i;
 	for(i = 0; i < user.n; ++i){
-		UniformSample(&ic[i], 0.0, 1.0);
+		UniformSample(&ic[i], 0.0, 0.1);
 	}
 
 	ApplyInitialConditions(x, ic);
@@ -548,13 +610,18 @@ int main(int argc, char** argv)
 
 	PetscPrintf(PETSC_COMM_WORLD, "k = %g, solver took %D steps, completed solve in time %d\n", (double)user.k, steps, (double)solve_time);
 
-	VecView(x, PETSC_VIEWER_STDOUT_WORLD);
-
+	VecNorm(x, NORM_2, &xnorm);
 	/* TODO: adjoint solve */
 
 
 
+	PetscPrintf(PETSC_COMM_WORLD, "||x|| = %f\n", xnorm);
 
+	if(wflag){
+		wf = fopen(writefile, "a");
+		ierr = PetscFPrintf(PETSC_COMM_WORLD, wf, "K, %f, ||x||, %f\n", user.k, xnorm);
+		ierr = fclose(wf);
+	}
 
 	/* cleanup */
 	MatDestroy(&J);
@@ -565,5 +632,3 @@ int main(int argc, char** argv)
 	PetscFinalize();
 	return ierr;
 }
-
-	

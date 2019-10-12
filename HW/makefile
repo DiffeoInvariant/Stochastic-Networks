@@ -14,4 +14,3 @@ include $(PETSC_DIR)/$(PETSC_ARCH)/lib/petsc/conf/petscrules
 
 HW3: HW3.c
 	$(CC) $(CFLAGS) HW3.c $(PETSC_CC_INCLUDES) -L $(PETSC_DIR)/$(PETSC_ARCH)/lib/ -lpetsc -lmpi -o HW3 
-
