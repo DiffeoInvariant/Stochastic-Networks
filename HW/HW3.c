@@ -1,7 +1,7 @@
 static char help[] = "Homework 3 Problem 4 code. Solves x' = kAx - x^2 - x for scalar k and graph adjacency matrix A.\n\
 		      Input parameters:\n\
 		      -k : scalar parameter\n\
-		      -monitor (bool) : monitor the solver's progress and print to console? Default PETSC_FALSE.\n\
+		      -monitor (bool) : monitor the solver's progress and print to console? Default false.\n\
 		      -n (int) : number of nodes in the network.\n\
 		      --filename (same as -f) : filename for the adjacency matrix.\n\n";
 
@@ -24,7 +24,7 @@ static char help[] = "Homework 3 Problem 4 code. Solves x' = kAx - x^2 - x for s
  * for scalar k and adjacency matrix A.
  */
 
-/*problem context struct*/
+/*problem context struct*/  
 typedef struct _n_prob_info *User;
 
 struct _n_prob_info
@@ -564,7 +564,7 @@ int main(int argc, char** argv)
 
 	/*power method for eigenvalues 'cuz who really cares about speed? (says the guy writing this big 'ol C file...)*/
 	PetscInt i;
-	/*
+	
 	for(i = 0; i < 100; ++i){
 		ierr = MatMult(user.A, ones, ones2);
 		ierr = VecCopy(ones2, ones);
@@ -572,10 +572,12 @@ int main(int argc, char** argv)
 
 	VecNorm(ones2, NORM_2, &xnorm);
 
-	xnorm /= user.n;
+	xnorm = pow(xnorm, 1.0/100.0);
+
+	/*xnorm /= user.n;*/
 
 	PetscPrintf(PETSC_COMM_WORLD, "Largest eigenvalue: %f\n", xnorm);
-	*/
+	
 	/* create TS context */
 	TSCreate(PETSC_COMM_WORLD, &ts);
 	TSSetFromOptions(ts);
