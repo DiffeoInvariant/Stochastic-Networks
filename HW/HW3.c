@@ -225,22 +225,9 @@ static PetscErrorCode ChungLuInvCDF(PetscReal p, PetscInt* k, PetscInt k0, Petsc
 	PetscReal cfactor, kc;
 
 	cfactor = 1.0/(pow((PetscReal)k0, 1.0-gamma) - pow((PetscReal)n, 1.0-gamma));
-	/*
-	PetscPrintf(PETSC_COMM_WORLD, "cfactor = %f\n", cfactor);
-	PetscPrintf(PETSC_COMM_WORLD, "p = %f\n", p);
-	
-	PetscPrintf(PETSC_COMM_WORLD, "p/c = %f\n", p/cfactor);
-	PetscPrintf(PETSC_COMM_WORLD, "1-g = %f\n", 1.0-gamma);
-	*/
+
 	if(gamma > 1.0){
-		/*
-		gamma -= 1.0;
-		PetscPrintf(PETSC_COMM_WORLD, "-gamma = %f\n", gamma);
-		PetscPrintf(PETSC_COMM_WORLD, "cfactor^gamma = %f\n", pow(cfactor, gamma));
-		PetscPrintf(PETSC_COMM_WORLD, "p^gamma = %f\n", pow(p, gamma));
-		*/
 		kc = pow(p/cfactor, 1.0/(1.0 - gamma ));
-		/*kc = pow(cfactor, gamma) / pow(p, gamma);*/
 	} else {
 
 		kc = pow(p, 1.0/(1.0 - gamma)) / pow(cfactor, 1.0/(1.0 - gamma));
@@ -366,7 +353,18 @@ static PetscErrorCode CreateAdjacencyMatrix(Mat* A, PetscInt k0, PetscInt n, Pet
 
 
 	ierr = GenerateIIDCandidateChungLuDegreeDistributions(kin, kout, &kavg, n, k0, gamma);
-
+	/* really bad code segment cuz I don't have time */
+	/*#ifdef WRITE_DD_CSV*/
+	FILE* ddf;
+	char targ_dd_buff[1024];
+	snprintf(targ_dd_buff, sizeof(targ_dd_buff), "ChungLuTargetDDn%dk0%dg%f.csv", (int)n, (int)k0, (double)gamma);
+	ddf = fopen(targ_dd_buff, "w");
+	PetscFPrintf(PETSC_COMM_WORLD, ddf, "Target in-degree, Target out-degree\n");
+	for(i = 0; i < n; ++i){
+	  PetscFPrintf(PETSC_COMM_WORLD, ddf, "%d, %d\n", kin[i], kout[i]);
+	}
+	fclose(ddf);
+	/*#endif*/
 	for(i = 0; i < n; ++i){
 		count = 0;
 		for(j = 0; j < n; ++j){
@@ -458,7 +456,7 @@ int main(int argc, char** argv)
 	Mat            		J;   
 	Mat            		Jp;
 	PetscInt       		steps;
-	PetscReal      		solve_time,xnorm, kmean, kinner, time_length = 10.0;
+	PetscReal      		solve_time,xnorm, kmean, kinner, time_length = 100.0;
 	PetscReal               step_size=0.01;
 	PetscBool      		flag, wflag, monitor = PETSC_FALSE, read_mat = PETSC_FALSE, write_mat = PETSC_TRUE;
 	char                    filename[100], writefile[100];
@@ -574,7 +572,13 @@ int main(int argc, char** argv)
 
 	xnorm = pow(xnorm, 1.0/100.0);
 
-	/*xnorm /= user.n;*/
+	PetscViewer viewer;
+
+	ierr = PetscViewerBinaryOpen(PETSC_COMM_WORLD, "p2c5In.bin", FILE_MODE_WRITE, &viewer);CHKERRQ(ierr);
+	ierr = VecView(kin, viewer);CHKERRQ(ierr);
+
+	ierr = PetscViewerBinaryOpen(PETSC_COMM_WORLD, "p2c5out.bin", FILE_MODE_WRITE, &viewer);CHKERRQ(ierr);
+	ierr = VecView(kout, viewer);CHKERRQ(ierr);
 
 	PetscPrintf(PETSC_COMM_WORLD, "Largest eigenvalue: %f\n", xnorm);
 	
