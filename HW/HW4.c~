@@ -1,4 +1,4 @@
-static char help[] = "Homework 3 Problem 4 code. Solves x' = kAx - x^2 - x for scalar k and graph adjacency matrix A.\n\
+static char help[] = "Homework 4 Problem 4 code..\n\
 		      Input parameters:\n\
 		      -k : scalar parameter\n\
 		      -monitor (bool) : monitor the solver's progress and print to console? Default false.\n\
@@ -19,18 +19,15 @@ static char help[] = "Homework 3 Problem 4 code. Solves x' = kAx - x^2 - x for s
  *
  * We're solving the system of ODEs 
  *
- * x' = k * Ax - x - x^2
+ * x' = beta * (1 - x) * Ax - gamma * x
  *
- * for scalar k and adjacency matrix A.
+ * for scalars beta, gamma and adjacency matrix A.
  */
-
-/*problem context struct*/  
-typedef struct _n_prob_info *User;
 
 struct _n_prob_info
 {
 	Mat A; /* adjacency matrix */
-	PetscReal k, gamma; /* k factor in the above ODE */
+	PetscReal beta, gamma; /* k factor in the above ODE */
 	PetscInt  k0, n;
 	/*bool print = true; print problem progress/info as it's being solved?*/
 
@@ -40,6 +37,9 @@ struct _n_prob_info
 	PetscReal tprev;
 /*	long int  N;problem size*/
 };
+
+/*problem context struct*/  
+typedef struct _n_prob_info *User;
 
 /*function that computes F(x,t) for system X' = F(X,t) */
 static PetscErrorCode RHSFunction(TS ts, PetscReal t, Vec X, Vec F, void* ctx)
@@ -52,7 +52,7 @@ static PetscErrorCode RHSFunction(TS ts, PetscReal t, Vec X, Vec F, void* ctx)
 	PetscInt	   N, id;
 
 	ierr = MatMult(prob->A, X, F);CHKERRQ(ierr);
-	ierr = VecScale(F, prob->k);CHKERRQ(ierr);
+	ierr = VecScale(F, prob->beta);CHKERRQ(ierr);
 
 	VecGetArrayRead(X, &x);
 	VecGetArray(F, &f);
@@ -60,7 +60,8 @@ static PetscErrorCode RHSFunction(TS ts, PetscReal t, Vec X, Vec F, void* ctx)
 
 	for(id = 0; id < N; ++id){
 		xval = x[id];
-		f[id] -= xval + xval * xval;
+		f[id] *= 1.0 - xval;
+		f[id] -= prob->gamma * xval;
 	}
 
 	VecRestoreArrayRead(X, &x);

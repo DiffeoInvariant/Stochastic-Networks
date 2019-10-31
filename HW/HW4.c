@@ -1,9 +1,4 @@
-static char help[] = "Homework 3 Problem 4 code. Solves x' = kAx - x^2 - x for scalar k and graph adjacency matrix A.\n\
-		      Input parameters:\n\
-		      -k : scalar parameter\n\
-		      -monitor (bool) : monitor the solver's progress and print to console? Default false.\n\
-		      -n (int) : number of nodes in the network.\n\
-		      --filename (same as -f) : filename for the adjacency matrix.\n\n";
+static char help[] = "Homework 4 Problem 4 code\n\n";
 
 #include <petscts.h> //PETSc time steppers
 #include <petscsys.h>
@@ -19,19 +14,17 @@ static char help[] = "Homework 3 Problem 4 code. Solves x' = kAx - x^2 - x for s
  *
  * We're solving the system of ODEs 
  *
- * x' = k * Ax - x - x^2
+ * x' = beta * (1 - x) * Ax - gamma * x
  *
- * for scalar k and adjacency matrix A.
+ * for scalars beta, gamma and adjacency matrix A.
  */
-
-/*problem context struct*/  
-typedef struct _n_prob_info *User;
 
 struct _n_prob_info
 {
 	Mat A; /* adjacency matrix */
-	PetscReal k, gamma; /* k factor in the above ODE */
-	PetscInt  k0, n;
+        Mat B;
+	PetscReal beta, gamma; 
+	PetscInt  n;
 	/*bool print = true; print problem progress/info as it's being solved?*/
 
 	/*	long int max_timesteps = 1E6;*/
@@ -40,6 +33,9 @@ struct _n_prob_info
 	PetscReal tprev;
 /*	long int  N;problem size*/
 };
+
+/*problem context struct*/  
+typedef struct _n_prob_info *User;
 
 /*function that computes F(x,t) for system X' = F(X,t) */
 static PetscErrorCode RHSFunction(TS ts, PetscReal t, Vec X, Vec F, void* ctx)
@@ -51,8 +47,10 @@ static PetscErrorCode RHSFunction(TS ts, PetscReal t, Vec X, Vec F, void* ctx)
 	PetscScalar 	   xval;
 	PetscInt	   N, id;
 
-	ierr = MatMult(prob->A, X, F);CHKERRQ(ierr);
-	ierr = VecScale(F, prob->k);CHKERRQ(ierr);
+	PetscFunctionBeginUser;
+
+	ierr = MatMult(prob->B, X, F);CHKERRQ(ierr);
+	ierr = VecScale(F, prob->beta);CHKERRQ(ierr);
 
 	VecGetArrayRead(X, &x);
 	VecGetArray(F, &f);
@@ -60,79 +58,14 @@ static PetscErrorCode RHSFunction(TS ts, PetscReal t, Vec X, Vec F, void* ctx)
 
 	for(id = 0; id < N; ++id){
 		xval = x[id];
-		f[id] -= xval + xval * xval;
+		f[id] *= 1.0 - xval;
+		f[id] -= prob->gamma * xval;
 	}
 
 	VecRestoreArrayRead(X, &x);
 	VecRestoreArray(F, &f);
 
-	return(0);
-}
-
-/* Jacobian of RHS, dF/dX = k * A - (1-2x) * I */
-static PetscErrorCode RHSJacobian(TS ts, PetscReal t, Vec X, Mat J, Mat Z, void* ctx)
-{
-	PetscErrorCode     ierr;
-	User               prob = (User)ctx;
-	Mat 		   AminusJ;
-	Vec                IdMultVec;
-	PetscInt           N;
-
-	VecGetSize(X, &N);
-	/* get vector of 1 - 2x */
-	VecDuplicate(X, &IdMultVec);
-	VecSet(IdMultVec, 1.0);
-	ierr = VecAXPY(IdMultVec, -2.0, X);CHKERRQ(ierr);
-
-	/* insert IdMultVec into the diagonal of AminusJ = (1-2x)* I */
-	ierr = MatCreateAIJ(PETSC_COMM_WORLD, PETSC_DECIDE, PETSC_DECIDE, N, N, 1, NULL, 0, NULL, &AminusJ);CHKERRQ(ierr);
-	ierr = MatDiagonalSet(AminusJ, IdMultVec, INSERT_VALUES);CHKERRQ(ierr);
-	/* compute Jacobian */
-	MatDuplicate(prob->A, MAT_COPY_VALUES, &J);
-	ierr = MatScale(J, prob->k);CHKERRQ(ierr);
-	ierr = MatAXPY(J, -1.0, AminusJ, DIFFERENT_NONZERO_PATTERN);CHKERRQ(ierr);
-
-	if(Z != J){
-		MatAssemblyBegin(Z, MAT_FINAL_ASSEMBLY);
-		MatAssemblyEnd(Z, MAT_FINAL_ASSEMBLY);
-	}
-	MatDestroy(&AminusJ);
-	VecDestroy(&IdMultVec);
-	return(0);
-}
-
-/* Jacobian of RHS w.r.t. the parameter k, J_k = k * Ax */
-static PetscErrorCode RHSJacobianP(TS ts, PetscReal t, Vec X, Mat J, void* ctx)
-{
-	PetscErrorCode     ierr;
-	User               prob = (User)ctx;
-	PetscInt           id, idStart, idEnd, idLen, cols[]={0};
-	Vec                ax;
-
-	
-	ierr = MatMult(prob->A, X, ax);CHKERRQ(ierr);
-
-	VecGetOwnershipRange(X, &idStart, &idEnd);
-	idLen = idEnd - idStart;
-	PetscInt rows[idLen];
-	for(id = 0; id < idLen; ++id){
-		rows[id] = id + idStart;
-	}
-
-	const PetscScalar  *Jvals;
-
-
-	VecGetArrayRead(ax, &Jvals);
-	MatSetValues(J, idLen,rows, 1, cols, Jvals, INSERT_VALUES);	
-
-	MatAssemblyBegin(J, MAT_FINAL_ASSEMBLY);
-	MatAssemblyEnd(J, MAT_FINAL_ASSEMBLY);
-
-
-	VecRestoreArrayRead(ax, &Jvals);
-	VecDestroy(&ax);
-
-	return(0);
+        PetscFunctionReturn(0);
 }
 
 
@@ -310,6 +243,32 @@ static PetscErrorCode RejectionChungLuSample(PetscBool* accepted, PetscInt candi
 	return ierr;
 }
 
+static PetscErrorCode SampleInfectedNodes(Vec prob_nodes_infected, PetscInt* count)
+{
+  /* finds number of nodes that are infected and puts that into count */
+  const PetscScalar* y;
+  PetscScalar sampled_val;
+  PetscInt N, id, n_infected;
+  PetscErrorCode ierr;
+
+  PetscFunctionBeginUser;
+  VecGetArrayRead(prob_nodes_infected, &y);
+  VecGetLocalSize(prob_nodes_infected, &N);
+
+  n_infected = 0;
+  
+  for(id = 0; id < N; ++id){
+    ierr = UniformSample(&sampled_val, 0.0, 1.0);
+    if(y[id] > sampled_val){
+      ++n_infected;
+    }
+  }
+
+  PetscFunctionReturn(ierr);
+}
+      
+  
+
 static PetscErrorCode 
 GenerateIIDCandidateChungLuDegreeDistributions(PetscInt* kin, PetscInt* kout, PetscReal* kavg, PetscInt n,
 					      PetscInt k0, PetscReal gamma)
@@ -341,7 +300,7 @@ GenerateIIDCandidateChungLuDegreeDistributions(PetscInt* kin, PetscInt* kout, Pe
 
 
 
-static PetscErrorCode CreateAdjacencyMatrix(Mat* A, PetscInt k0, PetscInt n, PetscReal gamma, PetscBool write_to_file, char* filename)
+static PetscErrorCode CreateAdjacencyMatrixCL(Mat* A, PetscInt k0, PetscInt n, PetscReal gamma, PetscBool write_to_file, char* filename)
 {
 	PetscInt i, j, kin[n], kout[n], connected_list[n], count;
 
@@ -392,7 +351,7 @@ static PetscErrorCode CreateAdjacencyMatrix(Mat* A, PetscInt k0, PetscInt n, Pet
 	if(write_to_file){
 		
 		if(filename == NULL){
-			memcpy(filename, "hw3mat.bin", sizeof("hw3mat.bin"));
+			memcpy(filename, "hw4mat.dat", sizeof("hw4mat.dat"));
 		}
 		
 		PetscViewer viewer;
@@ -403,11 +362,103 @@ static PetscErrorCode CreateAdjacencyMatrix(Mat* A, PetscInt k0, PetscInt n, Pet
 
 	return(ierr);
 }
+
+static PetscErrorCode CreateAdjacencyMatrix(Mat A, PetscInt n, PetscInt* targ_kin, PetscInt* targ_kout, PetscBool write_to_file, char* filename)
+{
+  	PetscInt i, j, connected_list[n], count;
+
+	PetscReal kavg;
+
+	PetscBool accepted;
+
+	PetscErrorCode ierr;
+	PetscFunctionBeginUser;
+
+	for(i = 0; i < n; ++i){
+	  kavg += 0.5 * (targ_kin[i] + targ_kout[i]);
+	}
+
+	kavg /= (PetscReal)n;
+	
+	for(i = 0; i < n; ++i){
+		count = 0;
+		for(j = 0; j < n; ++j){
+		  ierr = RejectionChungLuSample(&accepted, targ_kin[i], targ_kout[j], kavg, n);CHKERRQ(ierr);
+			if(accepted){
+				connected_list[count] = j;
+				++count;
+			}
+		}
+
+		PetscInt index_list[count];
+	        PetscScalar	vals[count];
+		/* copy into correctly-sized array for matrix insertion */
+		for(j = 0; j < count; ++j){
+			index_list[j] = connected_list[j];
+			vals[j] = 1;
+		}
+
+		ierr = MatSetValues(A, 1, &i, count, index_list, vals, INSERT_VALUES); CHKERRQ(ierr);
+	}
+
+	ierr = MatAssemblyBegin(A, MAT_FINAL_ASSEMBLY);
+	ierr = MatAssemblyEnd(A, MAT_FINAL_ASSEMBLY);
+
+	if(write_to_file){
 		
-PetscErrorCode ReadPetscMatrix(const char filename[], Mat* readMat)
+		if(filename == NULL){
+			memcpy(filename, "hw4mat.dat", sizeof("hw4mat.dat"));
+		}
+		
+		PetscViewer viewer;
+		ierr = PetscPrintf(PETSC_COMM_WORLD, "Writing matrix to binary file %s...\n", filename); CHKERRQ(ierr);
+		ierr = PetscViewerBinaryOpen(PETSC_COMM_WORLD, filename, FILE_MODE_WRITE, &viewer);CHKERRQ(ierr);
+		ierr = MatView(A, viewer);CHKERRQ(ierr);
+	}
+
+	PetscFunctionReturn(ierr);
+}
+
+static PetscErrorCode PowerLawInvCDF(PetscInt* k, PetscReal p,  PetscInt kmin, PetscReal alpha)
+{
+  PetscFunctionBeginUser;
+  *k = kmin * ((PetscInt)pow(1 - p, 1.0 / (1 - alpha)));
+  PetscFunctionReturn(0);
+}
+
+static PetscErrorCode PowerLawIIDSample(PetscInt* ksamples, PetscInt n, PetscInt kmin, PetscReal alpha)
+{
+  PetscFunctionBeginUser;
+  PetscInt i, k;
+  PetscErrorCode ierr;
+  PetscReal p;
+  for(i = 0; i < n; ++i){
+    ierr = UniformSample(&p, 0.0, 1.0);
+    ierr = PowerLawInvCDF(&k, p, kmin, alpha);CHKERRQ(ierr);
+    ksamples[i] = k;
+  }
+  PetscFunctionReturn(ierr);
+}
+
+static PetscErrorCode UniformIntIIDSample(PetscInt* ksamples, PetscInt n, PetscInt low, PetscInt high)
+{
+  PetscErrorCode ierr;
+  PetscReal x;
+  PetscInt i;
+  PetscFunctionBeginUser;
+  for(i = 0; i < n; ++i){
+    ierr = UniformSample(&x, (double)low, (double)high);
+    ksamples[i] = (PetscInt)(round(x));
+  }
+  PetscFunctionReturn(0);
+}
+  
+		
+static PetscErrorCode ReadPetscMatrix(const char filename[], Mat* readMat)
 {
     PetscErrorCode  ierr;
     PetscViewer     viewer;
+    PetscFunctionBeginUser;
     
     ierr = PetscPrintf(PETSC_COMM_WORLD, "Reading in matrix from %s...\n",
                        filename); CHKERRQ(ierr);
@@ -419,12 +470,13 @@ PetscErrorCode ReadPetscMatrix(const char filename[], Mat* readMat)
     ierr = PetscViewerDestroy(&viewer); CHKERRQ(ierr);
     
     ierr = PetscPrintf(PETSC_COMM_WORLD, "Successfully read matrix from %s.\n", filename); CHKERRQ(ierr);
-    
-    return ierr;
+    ierr = MatAssemblyBegin(*readMat, MAT_FINAL_ASSEMBLY);
+    ierr = MatAssemblyEnd(*readMat, MAT_FINAL_ASSEMBLY);
+    PetscFunctionReturn(ierr);
 }
 
 
-PetscErrorCode Degree(Mat A, Vec k, Vec ones, const char* type)
+static PetscErrorCode Degree(Mat A, Vec k, Vec ones, const char* type)
 {
 	PetscFunctionBeginUser;
 	PetscErrorCode ierr;
@@ -436,7 +488,7 @@ PetscErrorCode Degree(Mat A, Vec k, Vec ones, const char* type)
 	PetscFunctionReturn(ierr);
 }
 
-PetscErrorCode MeanDegree(Vec kin, PetscInt N, PetscReal* k)
+static PetscErrorCode MeanDegree(Vec kin, PetscInt N, PetscReal* k)
 {
 	PetscFunctionBeginUser;
 	PetscErrorCode ierr;
@@ -448,6 +500,17 @@ PetscErrorCode MeanDegree(Vec kin, PetscInt N, PetscReal* k)
 	PetscFunctionReturn(ierr);
 }
 
+static PetscErrorCode MeanSquareDegree(Vec kin, PetscInt N, PetscReal* k)
+{
+  PetscFunctionBeginUser;
+  PetscErrorCode ierr;
+  PetscReal x;
+  ierr = VecNorm(kin, NORM_2, &x);
+  *k = x * x / N;
+  PetscFunctionReturn(ierr);
+}
+  
+
 
 int main(int argc, char** argv)
 {
@@ -456,8 +519,8 @@ int main(int argc, char** argv)
 	Mat            		J;   
 	Mat            		Jp;
 	PetscInt       		steps;
-	PetscReal      		solve_time,xnorm, kmean, kinner, time_length = 100.0;
-	PetscReal               step_size=0.01;
+	PetscReal      		solve_time,xnorm, kmean, kinner, ksumsq, time_length = 100.0;
+	PetscReal               step_size=0.1;
 	PetscBool      		flag, wflag, monitor = PETSC_FALSE, read_mat = PETSC_FALSE, write_mat = PETSC_TRUE;
 	char                    filename[100], writefile[100];
 	FILE                    *wf;
@@ -477,8 +540,8 @@ int main(int argc, char** argv)
 		PetscPrintf(PETSC_COMM_WORLD, "Program initialized with %d processes.\n", size);
 	}
 
-	PetscOptionsGetReal(NULL, NULL, "-k", &user.k, &flag);
-	PetscOptionsGetInt(NULL, NULL, "-k0", &user.k0, &flag);
+	PetscOptionsGetReal(NULL, NULL, "-beta", &user.beta, &flag);
+	/*PetscOptionsGetInt(NULL, NULL, "-k0", &user.k0, &flag);*/
 	PetscOptionsGetInt(NULL, NULL, "-n", &user.n, &flag);
 	if(!flag){
 		PetscOptionsGetInt(NULL, NULL, "-N", &user.n, &flag);
@@ -520,10 +583,21 @@ int main(int argc, char** argv)
 	MatSetSizes(user.A, PETSC_DECIDE, PETSC_DECIDE, user.n, user.n);
 	MatSetUp(user.A);
 
+	MatCreate(PETSC_COMM_WORLD, &user.B);
+	MatSetSizes(user.B, PETSC_DECIDE, PETSC_DECIDE, user.n, user.n);
+	MatSetUp(user.B);
+
 	if(read_mat){
-		ierr = ReadPetscMatrix(filename, &user.A); CHKERRQ(ierr);
+	  ierr = ReadPetscMatrix(filename, &user.B); CHKERRQ(ierr);
+	  
 	} else {
-		ierr = CreateAdjacencyMatrix(&user.A, user.k0, user.n, user.gamma, write_mat, filename); CHKERRQ(ierr);
+	  PetscInt targ_k[user.n];
+	  PetscReal alpha = 4.0;
+	  PetscInt kmin = 50, kunifmax = 100;
+	  ierr = PowerLawIIDSample(targ_k, user.n, kmin, alpha);
+	  ierr = CreateAdjacencyMatrix(user.B, user.n, targ_k, targ_k, true, "hw4plmat.dat");
+	  /*ierr = UniformIntIIDSample(targ_k, user.n, kmin, kunifmax);
+	    ierr = CreateAdjacencyMatrix(user.A, user.n, targ_k, targ_k, true, "hw4unifmat.dat");*/
 	}
 
 	MatCreate(PETSC_COMM_WORLD, &J);
@@ -543,7 +617,7 @@ int main(int argc, char** argv)
 	VecCreateMPI(PETSC_COMM_WORLD, PETSC_DECIDE, user.n, &ones2);
 
 
-
+	/*
 
 	ierr = Degree(user.A, kin, ones, "in");
 
@@ -555,14 +629,30 @@ int main(int argc, char** argv)
 
 	kinner /= user.n;
 
-	PetscPrintf(PETSC_COMM_WORLD, "<kin, kout> = %f \n <k> = %f \n, <kin,kout>/<k> = %f .\n", kinner, kmean, kinner/kmean);
+	ierr = MeanSquareDegree(kin, user.n, &ksumsq);
+
+	PetscPrintf(PETSC_COMM_WORLD, "For the matrix with uniformly-distributed target degree distribution: \n <kin, kout> = %f,\n <k> = %f, \n <kin,kout>/<k> = %f,\n <k^2> = %f.\n", kinner, kmean, kinner/kmean, ksumsq);
+	*/
+	ierr = Degree(user.B, kin, ones, "in");
+
+	ierr = Degree(user.B, kout, ones, "out");
+
+	ierr = MeanDegree(kin, user.n, &kmean);CHKERRQ(ierr);
+
+	ierr = VecDot(kin, kout, &kinner);
+
+	kinner /= user.n;
+
+	ierr = MeanSquareDegree(kin, user.n, &ksumsq);
+
+	PetscPrintf(PETSC_COMM_WORLD, "For the matrix with power law-distributed target degree distribution: \n <kin, kout> = %f,\n <k> = %f, \n <kin,kout>/<k> = %f,\n <k^2> = %f.\n", kinner, kmean, kinner/kmean, ksumsq);
 
 	/*ierr = KSPCreate(PETSC_COMM_WORLD, &ksp);
 	ierr = KSPSetFromOptions(ksp);CHKERRQ(ierr);*/
 
 	/*power method for eigenvalues 'cuz who really cares about speed? (says the guy writing this big 'ol C file...)*/
 	PetscInt i;
-	
+	/*
 	for(i = 0; i < 100; ++i){
 		ierr = MatMult(user.A, ones, ones2);
 		ierr = VecCopy(ones2, ones);
@@ -572,15 +662,20 @@ int main(int argc, char** argv)
 
 	xnorm = pow(xnorm, 1.0/100.0);
 
-	PetscViewer viewer;
+	PetscPrintf(PETSC_COMM_WORLD, "Largest eigenvalue (uniform network): %f\n", xnorm);
+	*/
+	VecSet(ones, 1.0);
+	VecSet(ones2, 1.0);
+	for(i = 0; i < 20; ++i){
+		ierr = MatMult(user.B, ones, ones2);
+		ierr = VecCopy(ones2, ones);
+	}
 
-	ierr = PetscViewerBinaryOpen(PETSC_COMM_WORLD, "p2c5In.bin", FILE_MODE_WRITE, &viewer);CHKERRQ(ierr);
-	ierr = VecView(kin, viewer);CHKERRQ(ierr);
+	VecNorm(ones2, NORM_2, &xnorm);
 
-	ierr = PetscViewerBinaryOpen(PETSC_COMM_WORLD, "p2c5out.bin", FILE_MODE_WRITE, &viewer);CHKERRQ(ierr);
-	ierr = VecView(kout, viewer);CHKERRQ(ierr);
+	xnorm = pow(xnorm, 1.0/20.0);
 
-	PetscPrintf(PETSC_COMM_WORLD, "Largest eigenvalue: %f\n", xnorm);
+	PetscPrintf(PETSC_COMM_WORLD, "Largest eigenvalue (power law network): %f\n", xnorm);
 	
 	/* create TS context */
 	TSCreate(PETSC_COMM_WORLD, &ts);
@@ -614,7 +709,7 @@ int main(int argc, char** argv)
 	TSGetSolveTime(ts, &solve_time);
 	TSGetStepNumber(ts, &steps);
 
-	PetscPrintf(PETSC_COMM_WORLD, "k = %g, solver took %D steps, completed solve in time %d\n", (double)user.k, steps, (double)solve_time);
+	PetscPrintf(PETSC_COMM_WORLD, "Solver took %D steps, completed solve in time %d\n", steps, (double)solve_time);
 
 	VecNorm(x, NORM_2, &xnorm);
 	/* TODO: adjoint solve */
@@ -625,7 +720,7 @@ int main(int argc, char** argv)
 
 	if(wflag){
 		wf = fopen(writefile, "a");
-		ierr = PetscFPrintf(PETSC_COMM_WORLD, wf, "K, %f, ||x||, %f\n", user.k, xnorm);
+		ierr = PetscFPrintf(PETSC_COMM_WORLD, wf, "beta, %f, ||x||, %f\n", user.beta, xnorm);
 		ierr = fclose(wf);
 	}
 
