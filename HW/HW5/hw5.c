@@ -37,8 +37,7 @@ static PetscErrorCode OrderParameter(User ctx, Vec theta)
   ierr = VecGetLocalSize(theta, &n);CHKERRQ(ierr);
   rr = 0.;
   ri = 0.;
-  rrs = NULL;
-  ris = NULL;
+
   /* compute local sums */
   for(id = 0; id < n; ++id){
     /* r = abs(sum(exp(i * theta_n))) */ 
