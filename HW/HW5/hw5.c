@@ -68,6 +68,10 @@ static PetscErrorCode OrderParameter(User ctx, Vec theta)
   if(!rank){
     ctx->r_history[ctx->timestep] = rmag;
   }
+
+  free(rrs);
+  free(ris);
+  
   PetscFunctionReturn(0);
 }
 
