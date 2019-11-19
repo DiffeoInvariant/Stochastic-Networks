@@ -11,7 +11,8 @@ struct _kuramoto_prob_data {
   PetscInt     N;
   Vec          omega;
   PetscScalar  K;
-  PetscComplex r;
+  PetscReal    r;
+  PetscReal    psi;
 
   PetscReal    *r_history;
   PetscInt     timestep;
@@ -24,7 +25,7 @@ static PetscErrorCode OrderParameter(User ctx, Vec theta)
 {
   const PetscScalar  *theta_data;
   /*PetscComplex r = 0. + 0. * PETSC_i;*/
-  PetscReal    rr, ri, rmag, *rrs, *ris;
+  PetscReal    rr, ri, rmag,psi, *rrs, *ris;
   PetscErrorCode ierr;
   PetscInt n, id;
   PetscMPIInt rank, size;
@@ -62,8 +63,10 @@ static PetscErrorCode OrderParameter(User ctx, Vec theta)
     }
   }
   rmag = PetscSqrtReal(rr * rr + ri * ri) / (PetscReal)(ctx->N);
+  psi = PetscAtanReal(ri / rr);
   
   ctx->r = rmag;
+  ctx->psi = psi;
   if(!rank){
     ctx->r_history[ctx->timestep] = rmag;
   }
@@ -105,7 +108,7 @@ static PetscErrorCode KuramotoRHSFunction(TS ts, PetscReal t, Vec Theta, Vec F, 
   ierr = VecGetArray(F, &f);
 
   for(id = 0; id < n; ++id){
-    f[id] -= pctx->K * pctx->r * PetscSinReal(theta[id]);
+    f[id] -= pctx->K * pctx->r * PetscSinReal(theta[id] - pctx->psi);
   }
 
   ierr = VecRestoreArrayRead(Theta, &theta);CHKERRQ(ierr);
@@ -267,13 +270,15 @@ int main(int argc, char** argv)
     fclose(outfile);
   }
 
+  ierr = MPI_Barrier(PETSC_COMM_WORLD);CHKERRQ(ierr);
+  ierr = MPI_Barrier(PETSC_COMM_SELF);CHKERRQ(ierr);
   
   ierr = VecDestroy(&theta);CHKERRQ(ierr);
   ierr = VecDestroy(&ctx.omega);CHKERRQ(ierr);
+  ierr = TSDestroy(&ts);CHKERRQ(ierr);
   if(!rank){
     free(ctx.r_history);
   }
-  ierr = TSDestroy(&ts);CHKERRQ(ierr);
   ierr = PetscFinalize();CHKERRQ(ierr);
   return ierr;
 }
