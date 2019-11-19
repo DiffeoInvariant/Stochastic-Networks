@@ -83,7 +83,7 @@ static PetscErrorCode KuramotoRHSFunction(TS ts, PetscReal t, Vec Theta, Vec F, 
   PetscErrorCode ierr;
   User           pctx = (User)ctx;
   PetscScalar    *f;
-  PetscScalar    *theta;
+  const PetscScalar    *theta;
   PetscInt       n, m, id;
   PetscMPIInt    rank, size;
   PetscFunctionBeginUser;
@@ -94,22 +94,21 @@ static PetscErrorCode KuramotoRHSFunction(TS ts, PetscReal t, Vec Theta, Vec F, 
   ierr = OrderParameter(pctx, Theta);
 
   ierr = VecCopy(pctx->omega, F);
-  /*PetscPrintf(PETSC_COMM_WORLD, "F (after copying omega):\n");
-    VecView(F, PETSC_VIEWER_STDOUT_WORLD);*/
+
   ierr = VecGetLocalSize(Theta, &n);
   ierr = VecGetLocalSize(F, &m);
   if(m != n){
     SETERRQ(PETSC_COMM_SELF, PETSC_ERR_ARG_SIZ, "local sizes of F and theta must match.");
   }
 
-  ierr = VecGetArray(Theta, &theta);
+  ierr = VecGetArrayRead(Theta, &theta);
   ierr = VecGetArray(F, &f);
 
   for(id = 0; id < n; ++id){
     f[id] -= pctx->K * pctx->r * PetscSinReal(theta[id]);
   }
 
-  ierr = VecRestoreArray(Theta, &theta);CHKERRQ(ierr);
+  ierr = VecRestoreArrayRead(Theta, &theta);CHKERRQ(ierr);
   ierr = VecRestoreArray(F, &f);CHKERRQ(ierr);
   if(!rank){
     pctx->timestep += 1;
@@ -192,7 +191,6 @@ int main(int argc, char** argv)
   char                       filename[100];
   FILE                       *outfile;
   PetscReal                  *omega;
-  PetscReal                  step_size=0.1;
 
   PetscInitialize(&argc, &argv, NULL, help); if(ierr) return ierr;
 
@@ -255,24 +253,27 @@ int main(int argc, char** argv)
     /* write results to file formatted as N, K, <r> (where <r> is the time average of r)*/
     PetscReal rbar = 0.;
     PetscReal rv;
-    for(id = 0; id < ctx.timestep; ++id){
+    for(id = ctx.timestep/2; id < ctx.timestep; ++id){
       rv = ctx.r_history[id];
       /*PetscPrintf(PETSC_COMM_WORLD, "rv = %f\n", rv);*/
       rbar += rv;
     }
     rbar /= (PetscReal)ctx.timestep;
+    rbar *= 2;
 
     outfile = fopen(filename, "a");
+    PetscPrintf(PETSC_COMM_WORLD, "Long-term average r (<r>): %f.\n", rbar);
     ierr = PetscFPrintf(PETSC_COMM_WORLD, outfile, "%D, %f, %f\n", ctx.N, ctx.K, rbar);CHKERRQ(ierr);
-    ierr = fclose(outfile);
+    fclose(outfile);
   }
 
-
-  VecDestroy(&theta);
-  VecDestroy(&ctx.omega);
+  
+  ierr = VecDestroy(&theta);CHKERRQ(ierr);
+  ierr = VecDestroy(&ctx.omega);CHKERRQ(ierr);
   if(!rank){
     free(ctx.r_history);
   }
-  TSDestroy(&ts);
+  ierr = TSDestroy(&ts);CHKERRQ(ierr);
+  ierr = PetscFinalize();CHKERRQ(ierr);
   return ierr;
 }
