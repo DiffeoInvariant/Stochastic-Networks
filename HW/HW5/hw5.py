@@ -6,7 +6,7 @@ import numpy as np
 from scipy.stats import norm
 import argparse
 
-PETSC_BASE_ARGS = ['-ts_max_steps','10000','-ts_max_time','200.0', 'ts_type','TSRK']
+PETSC_BASE_ARGS = ['-ts_max_steps','10000','-ts_max_time','200.0', '-ts_type','TSRK']
 
 PETSC_MPIEXEC_DIR = '/home/diffeoinvariant/petsc-3.12.0/arch-linux2-c-debug/bin/'
 MAX_K = 5.0
