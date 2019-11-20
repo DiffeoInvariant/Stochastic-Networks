@@ -14,28 +14,25 @@ struct _kuramoto_prob_data {
   PetscReal    r;
   PetscReal    psi;
 
-  PetscReal    *r_history;
+  PetscReal    rtot;
   PetscInt     timestep;
-  PetscInt     max_timesteps;
+  PetscReal    start_count_time;
 };
 
 typedef struct _kuramoto_prob_data *User;
 
-static PetscErrorCode OrderParameter(User ctx, Vec theta)
+static PetscErrorCode OrderParameter(User ctx, Vec theta, PetscReal t, PetscMPIInt rank, PetscMPIInt size)
 {
   const PetscScalar  *theta_data;
   /*PetscComplex r = 0. + 0. * PETSC_i;*/
-  PetscReal    rr, ri, rmag,psi, *rrs, *ris;
+  PetscReal  rmag,psi, rr, ri, *rrs, *ris;
   PetscErrorCode ierr;
   PetscInt n, id;
-  PetscMPIInt rank, size;
   PetscFunctionBeginUser;
-
-  MPI_Comm_size(PETSC_COMM_WORLD, &size);
-  MPI_Comm_rank(PETSC_COMM_WORLD, &rank);
   
   ierr = VecGetArrayRead(theta, &theta_data);CHKERRQ(ierr);
   ierr = VecGetLocalSize(theta, &n);CHKERRQ(ierr);
+  
   rr = 0.;
   ri = 0.;
 
@@ -48,8 +45,8 @@ static PetscErrorCode OrderParameter(User ctx, Vec theta)
   ierr = VecRestoreArrayRead(theta, &theta_data);CHKERRQ(ierr);
   /* gather sums into root */
 
-  rrs = malloc(size * sizeof(PetscReal));
-  ris = malloc(size * sizeof(PetscReal));
+  ierr = PetscMalloc(size * sizeof(PetscReal), &rrs);CHKERRQ(ierr);
+  ierr = PetscMalloc(size * sizeof(PetscReal), &ris);CHKERRQ(ierr);
   
   MPI_Allgather(&rr, 1, MPI_DOUBLE, rrs, 1, MPI_DOUBLE, PETSC_COMM_WORLD);
   MPI_Allgather(&ri, 1, MPI_DOUBLE, ris, 1, MPI_DOUBLE, PETSC_COMM_WORLD);
@@ -62,17 +59,25 @@ static PetscErrorCode OrderParameter(User ctx, Vec theta)
       ri += ris[id];
     }
   }
-  rmag = PetscSqrtReal(rr * rr + ri * ri) / (PetscReal)(ctx->N);
+
+  rr /= (PetscReal)(ctx->N);
+  ri /= (PetscReal)(ctx->N);
+
+  rmag = PetscSqrtReal(rr * rr + ri * ri);
   psi = PetscAtanReal(ri / rr);
   
   ctx->r = rmag;
   ctx->psi = psi;
-  if(!rank){
-    ctx->r_history[ctx->timestep] = rmag;
+
+  if(t >= ctx->start_count_time){
+    if(!rank){
+      ctx->rtot += rmag;
+      ctx->timestep += 1;
+    }
   }
 
-  free(rrs);
-  free(ris);
+  PetscFree(rrs);
+  PetscFree(ris);
   
   PetscFunctionReturn(0);
 }
@@ -94,8 +99,7 @@ static PetscErrorCode KuramotoRHSFunction(TS ts, PetscReal t, Vec Theta, Vec F, 
   MPI_Comm_size(PETSC_COMM_WORLD, &size);
   MPI_Comm_rank(PETSC_COMM_WORLD, &rank);
   
-  ierr = OrderParameter(pctx, Theta);
-
+  ierr = OrderParameter(pctx, Theta, t, rank, size);
   ierr = VecCopy(pctx->omega, F);
 
   ierr = VecGetLocalSize(Theta, &n);
@@ -113,9 +117,6 @@ static PetscErrorCode KuramotoRHSFunction(TS ts, PetscReal t, Vec Theta, Vec F, 
 
   ierr = VecRestoreArrayRead(Theta, &theta);CHKERRQ(ierr);
   ierr = VecRestoreArray(F, &f);CHKERRQ(ierr);
-  if(!rank){
-    pctx->timestep += 1;
-  }
   
   PetscFunctionReturn(0);
 }
@@ -193,7 +194,7 @@ int main(int argc, char** argv)
   PetscBool                  flag, wflag;
   char                       filename[100];
   FILE                       *outfile;
-  PetscReal                  *omega;
+  PetscReal                  tot_time, *omega;
 
   PetscInitialize(&argc, &argv, NULL, help); if(ierr) return ierr;
 
@@ -219,13 +220,14 @@ int main(int argc, char** argv)
     PetscOptionsGetString(NULL, NULL, "--filename", filename, 100, &wflag);
   }
 
-  PetscOptionsGetInt(NULL, NULL, "-ts_max_steps", &ctx.max_timesteps, &flag);
+  PetscOptionsGetReal(NULL, NULL, "-ts_max_time", &tot_time, &flag);
+  
+  ctx.start_count_time = tot_time * 0.5;
+  ctx.timestep=0;
+  ctx.rtot = 0.0;
+  ctx.psi = 0.0;
+  ctx.r = 0.0;
 
-  if(!rank){
-    ctx.r_history = malloc(ctx.max_timesteps * sizeof(PetscReal));
-    /*ierr = PetscCalloc1(ctx.max_timesteps, &(ctx.r_history));CHKERRQ(ierr);*/
-    ctx.timestep = 0;
-  }
   ierr = VecCreateMPI(PETSC_COMM_WORLD, PETSC_DECIDE, ctx.N, &theta);CHKERRQ(ierr);
   ierr = VecCreateMPI(PETSC_COMM_WORLD, PETSC_DECIDE, ctx.N, &ctx.omega);CHKERRQ(ierr);
   
@@ -242,6 +244,7 @@ int main(int argc, char** argv)
   }
 
   ierr = VecRestoreArray(ctx.omega, &omega);
+  
 
   TSCreate(PETSC_COMM_WORLD, &ts); 
   TSSetRHSFunction(ts, NULL, KuramotoRHSFunction, &ctx);
@@ -252,33 +255,20 @@ int main(int argc, char** argv)
   
   TSSolve(ts, theta);
 
-  if(wflag && rank == 0){
+  if(wflag && !rank){
     /* write results to file formatted as N, K, <r> (where <r> is the time average of r)*/
-    PetscReal rbar = 0.;
-    PetscReal rv;
-    for(id = ctx.timestep/2; id < ctx.timestep; ++id){
-      rv = ctx.r_history[id];
-      /*PetscPrintf(PETSC_COMM_WORLD, "rv = %f\n", rv);*/
-      rbar += rv;
-    }
-    rbar /= (PetscReal)ctx.timestep;
-    rbar *= 2;
+    PetscReal rbar = ctx.rtot / ((PetscReal)ctx.timestep);
 
     outfile = fopen(filename, "a");
     PetscPrintf(PETSC_COMM_WORLD, "Long-term average r (<r>): %f.\n", rbar);
     ierr = PetscFPrintf(PETSC_COMM_WORLD, outfile, "%D, %f, %f\n", ctx.N, ctx.K, rbar);CHKERRQ(ierr);
     fclose(outfile);
   }
-
-  ierr = MPI_Barrier(PETSC_COMM_WORLD);CHKERRQ(ierr);
-  ierr = MPI_Barrier(PETSC_COMM_SELF);CHKERRQ(ierr);
   
   ierr = VecDestroy(&theta);CHKERRQ(ierr);
   ierr = VecDestroy(&ctx.omega);CHKERRQ(ierr);
   ierr = TSDestroy(&ts);CHKERRQ(ierr);
-  if(!rank){
-    free(ctx.r_history);
-  }
+
   ierr = PetscFinalize();CHKERRQ(ierr);
   return ierr;
 }
