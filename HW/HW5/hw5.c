@@ -233,18 +233,26 @@ int main(int argc, char** argv)
   
   ierr = VecGetLocalSize(ctx.omega, &nlocal);CHKERRQ(ierr);
   /* array for holding standard normal samples */
-  srand(time(NULL));
+  srand(ctx.N * rank);//time(NULL));
   PetscReal omega_samples[nlocal];
   ierr = StandardNormalSample(omega_samples, nlocal);CHKERRQ(ierr);
 
-  /* apply initial condition */
   ierr = VecGetArray(ctx.omega, &omega);CHKERRQ(ierr);
   for(id = 0; id < nlocal; ++id){
     omega[id] = omega_samples[id];
   }
 
   ierr = VecRestoreArray(ctx.omega, &omega);
-  
+
+  ierr = StandardNormalSample(omega_samples, nlocal);CHKERRQ(ierr);
+
+  /* apply initial condition */
+  ierr = VecGetArray(theta, &omega);CHKERRQ(ierr);
+  for(id = 0; id < nlocal; ++id){
+    omega[id] = omega_samples[id];
+  }
+
+  ierr = VecRestoreArray(theta, &omega);
 
   TSCreate(PETSC_COMM_WORLD, &ts); 
   TSSetRHSFunction(ts, NULL, KuramotoRHSFunction, &ctx);
